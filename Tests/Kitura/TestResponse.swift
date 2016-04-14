@@ -26,7 +26,7 @@ import XCTest
     import Darwin
 #endif
 
-class TestResponse : XCTestCase, KituraTest {
+class TestResponse : XCTestCase {
 
     static var allTests : [(String, TestResponse -> () throws -> Void)] {
         return [
@@ -34,7 +34,9 @@ class TestResponse : XCTestCase, KituraTest {
             ("testPostRequest", testPostRequest),
             ("testParameter", testParameter),
             ("testRedirect", testRedirect),
-            ("testErrorHandler", testErrorHandler)
+            ("testErrorHandler", testErrorHandler),
+            ("testHeaderModifiers", testHeaderModifiers),
+            ("testRouteFunc", testRouteFunc)
         ]
     }
 
@@ -45,7 +47,7 @@ class TestResponse : XCTestCase, KituraTest {
     let router = TestResponse.setupRouter()
 
     func testSimpleResponse() {
-    	performServerTest(router) {
+    	performServerTest(router) { expectation in
             self.performRequest("get", path:"/qwer", callback: {response in
                 XCTAssertNotNil(response, "ERROR!!! ClientRequest response object was nil")
                 XCTAssertEqual(response!.statusCode, HttpStatusCode.OK, "HTTP Status code was \(response!.statusCode)")
@@ -58,12 +60,13 @@ class TestResponse : XCTestCase, KituraTest {
                 catch{
                     XCTFail("No respose body")
                 }
+                expectation.fulfill()
             })
         }
     }
 
     func testPostRequest() {
-    	performServerTest(router) {
+    	performServerTest(router) { expectation in
             self.performRequest("post", path: "/bodytest", callback: {response in
                 XCTAssertNotNil(response, "ERROR!!! ClientRequest response object was nil")
                 //XCTAssertEqual(response!.method, "POST", "The request wasn't recognized as a post")
@@ -75,6 +78,7 @@ class TestResponse : XCTestCase, KituraTest {
                 catch{
                     XCTFail("No respose body")
                 }
+                expectation.fulfill()
             }) {req in
                 req.write(from: "plover\n")
                 req.write(from: "xyzzy\n")
@@ -83,7 +87,7 @@ class TestResponse : XCTestCase, KituraTest {
     }
 
     func testParameter() {
-    	performServerTest(router) {
+    	performServerTest(router) { expectation in
             self.performRequest("get", path: "/zxcv/test?q=test2", callback: {response in
                 XCTAssertNotNil(response, "ERROR!!! ClientRequest response object was nil")
                 do {
@@ -93,12 +97,13 @@ class TestResponse : XCTestCase, KituraTest {
                 catch{
                     XCTFail("No respose body")
                 }
+                expectation.fulfill()
             })
         }
     }
 
     func testRedirect() {
-        performServerTest(router) {
+        performServerTest(router) { expectation in
             self.performRequest("get", path: "/redir", callback: {response in
                 XCTAssertNotNil(response, "ERROR!!! ClientRequest response object was nil")
                 do {
@@ -107,33 +112,108 @@ class TestResponse : XCTestCase, KituraTest {
                     XCTAssertNotNil(body!.rangeOfString("ibm"),"response does not contain IBM")
 #else
                     XCTAssertNotNil(body!.range(of: "ibm"),"response does not contain IBM")
-#endif 
+#endif
                 }
                 catch{
                     XCTFail("No respose body")
                 }
+                expectation.fulfill()
             })
         }
     }
 
     func testErrorHandler() {
-        performServerTest(router) {
+        performServerTest(router) { expectation in
             self.performRequest("get", path: "/error", callback: {response in
                 XCTAssertNotNil(response, "ERROR!!! ClientRequest response object was nil")
                 do {
                     let body = try response!.readString()
-                    #if os(Linux)
-                    let errorDescription = "The operation could not be completed"
-                    #else
-                    let errorDescription = "The operation couldn’t be completed. (RouterTestDomain error 1.)"
-                    #endif
+                    let errorDescription = "foo is nil"
                     XCTAssertEqual(body!,"Caught the error: \(errorDescription)")
                 }
                 catch{
                     XCTFail("No respose body")
                 }
+                expectation.fulfill()
             })
         }
+    }
+
+    func testRouteFunc() {
+        performServerTest(router, asyncTasks: { expectation in
+            self.performRequest("get", path: "/route", callback: {response in
+                XCTAssertNotNil(response, "ERROR!!! ClientRequest response object was nil")
+                XCTAssertEqual(response!.statusCode, HttpStatusCode.OK, "HTTP Status code was \(response!.statusCode)")
+                do {
+                    let body = try response!.readString()
+                    XCTAssertEqual(body!,"get 1\nget 2\n")
+                }
+                catch{
+                    XCTFail("No respose body")
+                }
+                expectation.fulfill()
+            })
+        }, { expectation in
+            self.performRequest("post", path: "/route", callback: {response in
+                XCTAssertNotNil(response, "ERROR!!! ClientRequest response object was nil")
+                XCTAssertEqual(response!.statusCode, HttpStatusCode.OK, "HTTP Status code was \(response!.statusCode)")
+                do {
+                    let body = try response!.readString()
+                    XCTAssertEqual(body!,"post received")
+                }
+                catch{
+                    XCTFail("No respose body")
+                }
+                expectation.fulfill()
+            })
+        })
+    }
+
+    func testHeaderModifiers() {
+
+        router.get("/headerTest") { _, response, next in
+
+            response.append("Content-Type", value: "text/html")
+            XCTAssertEqual(response.getHeader("Content-Type"), "text/html")
+
+            response.append("Content-Type", value: "text/plain; charset=utf-8")
+            XCTAssertNil(response.getHeader("Content-Type"))
+            XCTAssertEqual(response.getHeaders("Content-Type")!, ["text/html", "text/plain; charset=utf-8"])
+
+            response.removeHeader("Content-Type")
+            XCTAssertNil(response.getHeader("Content-Type"))
+
+            response.append("Content-Type", value: ["text/plain", "image/png"])
+            XCTAssertEqual(response.getHeaders("Content-Type")!, ["text/plain", "image/png"])
+
+            response.append("Content-Type", value: ["text/html", "image/jpeg"])
+            XCTAssertEqual(response.getHeaders("Content-Type")!, ["text/plain", "image/png", "text/html", "image/jpeg"])
+
+            response.append("Content-Type", value: "charset=UTF-8")
+            XCTAssertEqual(response.getHeaders("Content-Type")!, ["text/plain", "image/png", "text/html", "image/jpeg", "charset=UTF-8"])
+
+            response.removeHeader("Content-Type")
+
+            response.append("Content-Type", value: ["text/plain"])
+            XCTAssertEqual(response.getHeader("Content-Type"), "text/plain")
+
+            response.append("Content-Type", value: ["image/png", "text/html"])
+            XCTAssertEqual(response.getHeaders("Content-Type")!, ["text/plain", "image/png", "text/html"])
+
+            do {
+                try response.status(HttpStatusCode.OK).end("<!DOCTYPE html><html><body><b>Received</b></body></html>\n\n")
+            }
+            catch {}
+            next()
+        }
+
+        performServerTest(router) { expectation in
+            self.performRequest("get", path: "/headerTest", callback: {response in
+                XCTAssertNotNil(response, "ERROR!!! ClientRequest response object was nil")
+                expectation.fulfill()
+            })
+        }
+
     }
 
     static func setupRouter() -> Router {
@@ -165,7 +245,7 @@ class TestResponse : XCTestCase, KituraTest {
             catch {}
             next()
         }
-    
+
         router.get("/redir") { _, response, next in
             do {
                 try response.redirect("http://www.ibm.com")
@@ -178,7 +258,21 @@ class TestResponse : XCTestCase, KituraTest {
         // Error handling example
         router.get("/error") { _, response, next in
             response.status(HttpStatusCode.INTERNAL_SERVER_ERROR)
-            response.error = NSError(domain: "RouterTestDomain", code: 1, userInfo: [:])
+            response.error = InternalError.NilVariable(variable: "foo")
+            next()
+        }
+
+        router.route("/route")
+        .get { _, response, next in
+            response.status(HttpStatusCode.OK).send("get 1\n")
+            next()
+        }
+        .post {_, response, next in
+            response.status(HttpStatusCode.OK).send("post received")
+            next()
+        }
+        .get { _, response, next in
+            response.status(HttpStatusCode.OK).send("get 2\n")
             next()
         }
 
@@ -201,7 +295,7 @@ class TestResponse : XCTestCase, KituraTest {
                 catch {}
             }
             else {
-                response.error = NSError(domain: "RouterTestDomain", code: 1, userInfo: [NSLocalizedDescriptionKey:"Failed to parse request body"])
+                response.error = Error.FailedToParseRequestBody(body: "\(request.body)")
             }
 
             next()
@@ -210,7 +304,14 @@ class TestResponse : XCTestCase, KituraTest {
         router.error { request, response, next in
             response.setHeader("Content-Type", value: "text/plain; charset=utf-8")
             do {
-                try response.send("Caught the error: \(response.error!.localizedDescription)").end()
+                let errorDescription: String
+                if let error = response.error {
+                    errorDescription = "\(error)"
+                }
+                else {
+                    errorDescription = ""
+                }
+                try response.send("Caught the error: \(errorDescription)").end()
             }
             catch {}
             next()
@@ -219,4 +320,3 @@ class TestResponse : XCTestCase, KituraTest {
 	return router
     }
 }
-
